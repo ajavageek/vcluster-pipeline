@@ -1,0 +1,5 @@
+networking:
+  replicateServices:
+    fromHost:
+      - from: github.run_id/vcluster-pipeline
+        to: default/vcluster-pipeline
