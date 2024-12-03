@@ -1,0 +1,8 @@
+fullnameOverride: postgres
+auth:
+  user: postgres
+  password: root
+  postgresPassword: roottoo
+primary:
+  persistence:
+    enabled: false

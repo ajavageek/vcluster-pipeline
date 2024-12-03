@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vcluster-pipeline
+  labels:
+    type: app
+    app: vcluster-pipeline
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vcluster-pipeline
+  template:
+    metadata:
+      labels:
+        type: app
+        app: vcluster-pipeline
+    spec:
+      containers:
+        - name: vcluster-pipeline
+          image: ghcr.io/ajavageek/vcluster-pipeline:latest
+          envFrom:
+            - configMapRef:
+                name: postgres-config
+      imagePullSecrets:
+        - name: github-docker-registry
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vcluster-pipeline
+spec:
+  type: LoadBalancer
+  ports:
+    - port: 8080
+      targetPort: 8080
+  selector:
+    app: vcluster-pipeline

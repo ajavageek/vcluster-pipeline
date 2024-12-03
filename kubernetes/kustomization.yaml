@@ -1,0 +1,7 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - vcluster-pipeline.yaml
+images:
+  - name: ghcr.io/ajavageek/vcluster-pipeline
+    newTag: github.run_id
