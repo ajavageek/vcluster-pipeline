@@ -1,0 +1,125 @@
+name: Test on PR
+
+on:
+  # For demo purposes only
+  workflow_dispatch:
+  pull_request:
+    branches: [ "master" ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKER_BUILD_RECORD_RETENTION_DAYS: 1
+  VCLUSTER_VERSION: v0.22.0
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Install JRE
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: maven
+      - name: Cache build artifacts
+        uses: actions/cache@v3
+        with:
+          path: target
+          key: ${{ runner.os }}-build-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-build-
+      - name: Run "unit" tests
+        run: ./mvnw test
+        env:
+          SPRING_PROFILES_ACTIVE: local
+      - name: Authenticate on Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/49535911505/locations/global/workloadIdentityPools/github-actions/providers/github-provider
+          service_account: github-actions@vcluster-pipeline.iam.gserviceaccount.com
+      - name: Set up Google Cloud CLI
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          version: latest
+      - name: Set GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: minimal-cluster
+          location: europe-west9
+      - name: Install kustomize
+        run: |
+          curl -s "https://raw.githubusercontent.com/kubernetes-sigs/kustomize/master/hack/install_kustomize.sh" | bash
+          sudo mv kustomize /usr/local/bin
+      - name: Edit image tag with GitHub Run ID
+        run: (cd kubernetes && kustomize edit set image ghcr.io/ajavageek/vcluster-pipeline=:${{github.run_id}})
+      - name: Edit namespace with GitHub Run ID
+        run: sed -i "s/github.run_id\/vcluster-pipeline/${{github.run_id}}\/vcluster-pipeline/" kubernetes/vcluster.yaml
+      - name: Install vCluster
+        run: wget -O vcluster "https://github.com/loft-sh/vcluster/releases/download/${{ env.VCLUSTER_VERSION }}/vcluster-linux-amd64" && chmod u+x vcluster && mv vcluster /usr/local/bin
+      - name: Create a vCluster
+        run: vcluster create vcluster-pipeline-${{github.run_id}} --values kubernetes/vcluster.yaml
+      - name: Connect to the vCluster
+        run: vcluster connect vcluster-pipeline-${{github.run_id}}
+      - name: Schedule PostgreSQL
+        run: |
+          helm repo add bitnami https://charts.bitnami.com/bitnami
+          helm dependency build kubernetes/helm
+          helm install postgresql kubernetes/helm
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      - name: Log into registry ${{ env.REGISTRY }}
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{github.run_id}}
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          push: true
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Set config map from values.yaml
+        run: |
+          kubectl create configmap postgres-config \
+            --from-literal="SPRING_FLYWAY_URL=jdbc:postgresql://$(yq .postgresql.fullnameOverride kubernetes/values.yaml):5432/" \
+            --from-literal="SPRING_R2DBC_URL=r2dbc:postgresql://$(yq .postgresql.fullnameOverride kubernetes/values.yaml):5432/" \
+            --from-literal="SPRING_R2DBC_USERNAME=$(yq .postgresql.auth.user kubernetes/values.yaml)" \
+            --from-literal="SPRING_R2DBC_PASSWORD=$(yq .postgresql.auth.password kubernetes/values.yaml)"
+      - name: Create Docker Registry Secret
+        run: |
+          kubectl create secret docker-registry github-docker-registry \
+            --docker-server=${{ env.REGISTRY }} --docker-email="noreply@github.com" \
+            --docker-username="${GITHUB_USERNAME}" --docker-password="${GITHUB_TOKEN}" \
+            --dry-run=client -o yaml | kubectl apply -f -
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_USERNAME: ${{ github.actor }}
+      - name: Deploy Kustomized manifest to Google Cloud
+        run: |
+          kustomize build kubernetes > manifest.yml
+          kubectl apply -f manifest.yml
+      - name: Run integration tests
+        run: ./mvnw verify -Dtest=SkipAll -Dsurefire.failIfNoSpecifiedTests=false
+        env:
+          APP_BASE_URL: http://$(kubectl get service vcluster-pipeline -o jsonpath='{.status.loadBalancer.ingress[0].ip}'):$(kubectl get service vcluster-pipeline -o jsonpath='{.spec.ports[0].nodePort}')
+      - name: Delete the vCluster
+        run: vcluster delete vcluster-pipeline-${{github.run_id}}

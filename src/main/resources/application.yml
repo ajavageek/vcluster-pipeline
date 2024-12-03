@@ -1,0 +1,11 @@
+spring:
+  application:
+    name: vcluster-pipeline
+  r2dbc:
+    username: test
+    password: test
+    url: r2dbc:postgresql://localhost:8082/flyway-test-db
+  flyway:
+    user: ${SPRING_R2DBC_USERNAME}
+    password: ${SPRING_R2DBC_PASSWORD}
+    url: jdbc:postgresql://localhost:8082/flyway-test-db
