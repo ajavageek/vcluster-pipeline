@@ -60,13 +60,14 @@ jobs:
       - name: Authenticate on Google Cloud
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: projects/49535911505/locations/global/workloadIdentityPools/github-actions/providers/github-provider
-          service_account: github-actions@vcluster-pipeline.iam.gserviceaccount.com
+          workload_identity_provider: projects/493938438267/locations/global/workloadIdentityPools/github-actions2/providers/github-provider
+          service_account: 'github-actions@xplane-demo.iam.gserviceaccount.com'
       - name: Set GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: minimal-cluster
           location: europe-west9
+          project_id: xplane-demo
       - name: Edit image tag with GitHub Run ID
         run: (cd kubernetes && kustomize edit set image ghcr.io/ajavageek/vcluster-pipeline=:${{github.run_id}})
       - name: Install vCluster
